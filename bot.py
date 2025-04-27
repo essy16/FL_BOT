@@ -3,4 +3,4 @@ import telebot
 
 API_KEY = os.getenv('TELEGRAM_API_KEY')
 
-bot = telebot.TeleBot(BOT_TOKEN)
+bot = telebot.TeleBot(API_KEY)
