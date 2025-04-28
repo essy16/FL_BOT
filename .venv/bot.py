@@ -4,15 +4,22 @@ import logging
 import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes, MessageHandler, filters
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
-# BOT_KEY = os.getenv('TELEGRAM_API_KEY')
-BOT_KEY = "7723028849:AAHkW2FDyBK05KmFyofKGpdrMN9Pa96hMmI"
+print(os.getenv('API_KEY'))
+
+
+BOT_KEY = os.getenv('TELEGRAM_API_KEY')
+# BOT_KEY = "7723028849:AAHkW2FDyBK05KmFyofKGpdrMN9Pa96hMmI"
 # bot = telebot.TeleBot(BOT_KEY)
 
 API_BASE_URL = "https://api.coinrabbit.io"
 
-API_KEY = "04b6e4b9-ba09-4d0b-9b6f-13a0bc7cb348"
+API_KEY = os.getenv('API_KEY')
 user_sessions = {}
 
 
@@ -80,7 +87,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/help - Show this help message"
     )
 
-
 async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     telegram_user_id = update.effective_user.id
 
@@ -95,7 +101,7 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             "⚠️ Please send the loan details in this format:\n\n"
             "`from_code from_network amount ltv_percent`\n\n"
-            "Example:\n`BTC BTC 0.1 50`",
+            "Example:\n`/estimate BTC BTC 1 0.5`",
             parse_mode="Markdown"
         )
         return
@@ -110,15 +116,16 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     params = {
         "from_code": from_code.upper(),
         "from_network": from_network.upper(),
-        "to_code": "USDT",        # Hardcoded for now
-        "to_network": "TRX",      # Hardcoded for now
-        "amount": amount,
-        "ltv_percent": ltv_percent,
-        "exchange": "direct"
+        "to_code": "USDT",            # Hardcoded to USDT
+        "to_network": "ETH",          
+        "amount": amount,              
+        "ltv_percent": ltv_percent,    
+        "exchange": "reverse"          
     }
 
     try:
         response = requests.get(url, headers=headers, params=params)
+        print("Requested URL:", response.url)  # ✅ Print for debug
         response.raise_for_status()
         data = response.json()
 
@@ -145,11 +152,73 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"Loan estimation failed: {e}")
         await update.message.reply_text("❌ An error occurred while estimating your loan. Please try again later.")
 
-
 async def unknown(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Sorry, I didn't understand that command. Use /help to see available commands."
     )
+
+
+async def create_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_user_id = update.effective_user.id
+
+    if telegram_user_id not in user_sessions:
+        await update.message.reply_text("❌ Please authenticate first using /start.")
+        return
+
+    user_data = user_sessions.get(telegram_user_id)
+    user_token = user_data.get("user_token")
+    latest_estimate = user_data.get("latest_estimate")
+
+    if not latest_estimate:
+        await update.message.reply_text("⚠️ Please first use /estimate to get a loan offer before creating a loan.")
+        return
+
+    url = f"{API_BASE_URL}/v2/loans"
+    headers = {
+        "x-api-key": API_KEY,
+        "x-user-token": user_token,
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "deposit": {
+            "currency_code": latest_estimate["from_code"],
+            "currency_network": latest_estimate["from_network"],
+            "expected_amount": latest_estimate["amount"]
+        },
+        "loan": {
+            "currency_code": "USDT",          # Hardcoded to USDT
+            "currency_network": "TRX"         # Hardcoded to TRX
+        },
+        "ltv_percent": latest_estimate["ltv_percent"],
+        "referral": "qUwXXaSe1S"               # Optional: your referral code
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        response.raise_for_status()
+        data = response.json()
+
+        loan_id = data.get("loan_id")
+        deposit_address = data.get("deposit_address")
+
+        if loan_id and deposit_address:
+            await update.message.reply_text(
+                f"🎯 Loan Created Successfully!\n"
+                f"- Loan ID: `{loan_id}`\n"
+                f"- Deposit Address: `{deposit_address}`\n\n"
+                f"👉 Please send your collateral to the address above to activate your loan.",
+                parse_mode="Markdown"
+            )
+            # Save current loan_id in session
+            user_sessions[telegram_user_id]["current_loan_id"] = loan_id
+        else:
+            await update.message.reply_text("❌ Failed to create loan. Please try again later.")
+
+    except Exception as e:
+        logging.error(f"Loan creation failed: {e}")
+        await update.message.reply_text("❌ An error occurred while creating your loan. Please try again later.")
+
 
 # --- Main Application ---
 def main():
@@ -158,25 +227,11 @@ def main():
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("estimate", estimate))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown))  # Catch unknown commands
+    app.add_handler(CommandHandler("create", create_loan))
+    app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
-    app.run_polling()  # ✅ Only ONE app.run_polling()
-    app = ApplicationBuilder().token(BOT_KEY).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(CommandHandler("estimate", estimate)) 
-    app.add_handler(MessageHandler(filters.COMMAND, unknown))  # Catch unknown commands
-
-    app = ApplicationBuilder().token(BOT_KEY).build()
-
-    # Register command handlers
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.COMMAND, unknown))  # Catch unknown commands
-
-    # Start bot
     app.run_polling()
+
 
 if __name__ == "__main__":
     main()
