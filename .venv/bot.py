@@ -119,7 +119,7 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
     "to_code": "USDT",
     "to_network": "ETH",
     "amount": str(amount).strip(),
-    "ltv_percent": ltv_percent/100,
+    "ltv_percent": ltv_percent,
     "exchange": "direct"
 }
 
@@ -178,9 +178,19 @@ async def create_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_token = user_data.get("user_token")
     latest_estimate = user_data.get("latest_estimate")
 
+    if not user_token:
+        await update.message.reply_text("❌ Missing user token. Please restart with /start.")
+        print("❌ ERROR: Missing user token.")
+        return
+
     if not latest_estimate:
         await update.message.reply_text("⚠️ Please first use /estimate to get a loan offer before creating a loan.")
+        print("⚠️ ERROR: No estimate found for user.")
         return
+
+    # Correct the ltv_percent here: divide by 100
+    corrected_ltv_percent = latest_estimate["ltv_percent"]
+    # str(float(latest_estimate["ltv_percent"]) / 100)
 
     url = f"{API_BASE_URL}/v2/loans"
     headers = {
@@ -196,37 +206,49 @@ async def create_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "expected_amount": latest_estimate["amount"]
         },
         "loan": {
-            "currency_code": "USDT",          # Hardcoded to USDT
-            "currency_network": "TRX"         # Hardcoded to TRX
+            "currency_code": "USDT",
+            "currency_network": "ETH"
         },
-        "ltv_percent": latest_estimate["ltv_percent"],
-        "referral": "qUwXXaSe1S"               # Optional: your referral code
+        "ltv_percent": corrected_ltv_percent,
+        "referral": "qUwXXaSe1S"
     }
+
+    print("📤 Creating loan request...")
+    print("POST URL:", url)
+    print("HEADERS:", headers)
+    print("PAYLOAD:", payload)
 
     try:
         response = requests.post(url, headers=headers, json=payload)
-        response.raise_for_status()
+        print("STATUS:", response.status_code)
+        print("RESPONSE:", response.text)
+
         data = response.json()
+        response_data = data.get("response", {})
 
-        loan_id = data.get("loan_id")
-        deposit_address = data.get("deposit_address")
 
-        if loan_id and deposit_address:
+        loan_id = response_data.get("loan_id")
+
+        if loan_id:
             await update.message.reply_text(
                 f"🎯 Loan Created Successfully!\n"
-                f"- Loan ID: `{loan_id}`\n"
-                f"- Deposit Address: `{deposit_address}`\n\n"
-                f"👉 Please send your collateral to the address above to activate your loan.",
+                f"- Loan ID: `{loan_id}`\n\n"
+                f"👉 Please continue with /confirm to get your deposit address and finalize the loan.",
                 parse_mode="Markdown"
             )
-            # Save current loan_id in session
             user_sessions[telegram_user_id]["current_loan_id"] = loan_id
         else:
-            await update.message.reply_text("❌ Failed to create loan. Please try again later.")
-
+            msg = data.get("message", "Unknown error")
+            await update.message.reply_text(f"❌ Failed to create loan. Server says: {msg}")
     except Exception as e:
         logging.error(f"Loan creation failed: {e}")
         await update.message.reply_text("❌ An error occurred while creating your loan. Please try again later.")
+
+
+
+
+
+
 
 
 # --- Main Application ---
