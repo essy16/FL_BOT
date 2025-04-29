@@ -245,9 +245,60 @@ async def create_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ An error occurred while creating your loan. Please try again later.")
 
 
+async def confirm_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_user_id = update.effective_user.id
 
+    if telegram_user_id not in user_sessions:
+        await update.message.reply_text("❌ Please authenticate first using /start.")
+        return
 
+    user_data = user_sessions.get(telegram_user_id)
+    user_token = user_data.get("user_token")
+    loan_id = user_data.get("current_loan_id")
 
+    if not user_token or not loan_id:
+        await update.message.reply_text("⚠️ No loan to confirm. Please create one with /create.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("⚠️ Please provide the wallet address where you want to receive the loan.\n\nExample:\n`/confirm TXg5...yourAddress`", parse_mode="Markdown")
+        return
+
+    receive_address = context.args[0]
+
+    url = f"{API_BASE_URL}/v2/loans/{loan_id}/confirm"
+    headers = {
+        "x-api-key": API_KEY,
+        "x-user-token": user_token,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "loan": {
+            "receive_address": receive_address
+        },
+        "agreed_to_tos": True
+    }
+
+    print("📤 Confirming loan...")
+    print("POST URL:", url)
+    print("HEADERS:", headers)
+    print("PAYLOAD:", payload)
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        print("STATUS:", response.status_code)
+        print("RESPONSE:", response.text)
+
+        data = response.json()
+        if str(data.get("result")).lower() == "true" or "response" in data:
+            await update.message.reply_text("✅ Loan confirmed! Funds will be sent to your provided address.")
+        else:
+            msg = data.get("message", "Unknown error")
+            await update.message.reply_text(f"❌ Could not confirm loan. Server says: {msg}")
+
+    except Exception as e:
+        logging.error(f"Loan confirmation failed: {e}")
+        await update.message.reply_text("❌ An error occurred while confirming your loan.")
 
 
 
@@ -259,6 +310,8 @@ def main():
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("estimate", estimate))
     app.add_handler(CommandHandler("create", create_loan))
+    app.add_handler(CommandHandler("confirm", confirm_loan))
+
     app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
     app.run_polling()
