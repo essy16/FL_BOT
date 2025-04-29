@@ -96,17 +96,17 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user_token = user_sessions[telegram_user_id]["user_token"]
 
-    # Check if user provided enough arguments
     if len(context.args) != 4:
         await update.message.reply_text(
             "⚠️ Please send the loan details in this format:\n\n"
             "`from_code from_network amount ltv_percent`\n\n"
-            "Example:\n`/estimate BTC BTC 1 0.5`",
+            "Example:\n`/estimate BTC BTC 1 50`",
             parse_mode="Markdown"
         )
         return
 
     from_code, from_network, amount, ltv_percent = context.args
+    # ltv_percent = str(float(ltv_percent) / 100)  # Convert 50 to 0.5
 
     url = f"{API_BASE_URL}/v2/loans/estimate"
     headers = {
@@ -114,28 +114,31 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "Content-Type": "application/json"
     }
     params = {
-        "from_code": from_code.upper(),
-        "from_network": from_network.upper(),
-        "to_code": "USDT",            # Hardcoded to USDT
-        "to_network": "ETH",          
-        "amount": amount,              
-        "ltv_percent": ltv_percent,    
-        "exchange": "reverse"          
-    }
+    "from_code": from_code.strip().upper(),
+    "from_network": from_network.strip().upper(),
+    "to_code": "USDT",
+    "to_network": "ETH",
+    "amount": str(amount).strip(),
+    "ltv_percent": ltv_percent/100,
+    "exchange": "direct"
+}
 
     try:
         response = requests.get(url, headers=headers, params=params)
-        print("Requested URL:", response.url)  # ✅ Print for debug
+        print("Requested URL:", response.url)
         response.raise_for_status()
         data = response.json()
+        print("DEBUG: Raw API Response:", data)
 
-        # Extract info from API response
-        loan_amount = data.get("loan_amount")
-        yearly_interest = data.get("interest_year_percent")
-        monthly_interest = data.get("interest_month_percent")
-        daily_interest = data.get("interest_day_percent")
+        if str(data.get("result")).lower() == "true" and data.get("response"):
+            loan_data = data["response"]
+            loan_amount = loan_data.get("amount_to")
+            interest = loan_data.get("interest_amounts", {})
 
-        if loan_amount:
+            yearly_interest = interest.get("year")
+            monthly_interest = interest.get("month")
+            daily_interest = interest.get("day")
+
             await update.message.reply_text(
                 f"🎯 Loan Estimate:\n"
                 f"- Borrow Amount: {loan_amount} USDT\n"
@@ -143,10 +146,16 @@ async def estimate(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"- Interest per Month: {monthly_interest}%\n"
                 f"- Interest per Day: {daily_interest}%"
             )
-            # Save this estimate if needed later
-            user_sessions[telegram_user_id]["latest_estimate"] = params
+
+            user_sessions[telegram_user_id]["latest_estimate"] = {
+                "from_code": from_code.upper(),
+                "from_network": from_network.upper(),
+                "amount": amount,
+                "ltv_percent": ltv_percent
+            }
+
         else:
-            await update.message.reply_text("❌ Could not estimate loan. Please check your input.")
+            await update.message.reply_text(f"❌ Could not estimate loan. Reason: {data.get('message', 'Unknown error')}")
 
     except Exception as e:
         logging.error(f"Loan estimation failed: {e}")
