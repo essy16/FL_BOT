@@ -301,6 +301,116 @@ async def confirm_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ An error occurred while confirming your loan.")
 
 
+async def pledge_collateral(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_user_id = update.effective_user.id
+
+    if telegram_user_id not in user_sessions:
+        await update.message.reply_text("❌ Please authenticate first using /start.")
+        return
+
+    user_data = user_sessions.get(telegram_user_id)
+    user_token = user_data.get("user_token")
+    loan_id = user_data.get("current_loan_id")
+
+    if not user_token or not loan_id:
+        await update.message.reply_text("⚠️ No loan to pledge for. Please create a loan first with /create.")
+        return
+
+    if len(context.args) != 1:
+        await update.message.reply_text("⚠️ Please provide the address you’ll use to send the collateral.")
+        return
+
+    pledge_address = context.args[0]
+
+    url = f"{API_BASE_URL}/v2/loans/{loan_id}/pledge"
+    headers = {
+        "x-api-key": API_KEY,
+        "x-user-token": user_token,
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "address": pledge_address,
+        "extra_id": None
+    }
+
+    print("\n📤 Pledging collateral...")
+    print("POST URL:", url)
+    print("HEADERS:", headers)
+    print("PAYLOAD:", payload)
+
+    try:
+        response = requests.post(url, headers=headers, json=payload)
+        print("STATUS:", response.status_code)
+        print("RESPONSE:", response.text)
+
+        data = response.json()
+        deposit_address = data.get("response", {}).get("deposit_address")
+
+        if deposit_address:
+            await update.message.reply_text(
+                f"✅ Please send your collateral to this address:\n`{deposit_address}`",
+        parse_mode="Markdown"
+            )
+        else:
+            msg = data.get("message", "Unknown error")
+            await update.message.reply_text(f"❌ Failed to pledge collateral. Server says: {msg}")
+
+    except Exception as e:
+        logging.error(f"Collateral pledge failed: {e}")
+        await update.message.reply_text("❌ An error occurred while pledging collateral.")
+
+
+
+
+
+async def view_loans(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    telegram_user_id = update.effective_user.id
+
+    if telegram_user_id not in user_sessions:
+        await update.message.reply_text("❌ Please authenticate first using /start.")
+        return
+
+    user_token = user_sessions[telegram_user_id].get("user_token")
+    url = f"{API_BASE_URL}/v2/loans"
+    headers = {
+        "x-api-key": API_KEY,
+        "x-user-token": user_token
+    }
+
+    print("\n📥 Fetching active loans...")
+    print("GET URL:", url)
+    print("HEADERS:", headers)
+
+    try:
+        response = requests.get(url, headers=headers)
+        print("STATUS:", response.status_code)
+        print("RESPONSE:", response.text)
+
+        data = response.json()
+        loans = data.get("response", [])
+
+        if not loans:
+            await update.message.reply_text("📭 You have no active loans.")
+            return
+
+        reply = "📄 *Your Active Loans:*\n"
+        for loan in loans:
+            loan_id = loan.get("loan_id")
+            amount = loan.get("loan", {}).get("expected_amount")
+            status = loan.get("status")
+            reply += f"\n• ID: `{loan_id}`\n  Amount: {amount} USDT\n  Status: {status}\n"
+
+        await update.message.reply_text(reply, parse_mode="Markdown")
+
+    except Exception as e:
+        logging.error(f"Fetching loans failed: {e}")
+        await update.message.reply_text("❌ An error occurred while fetching your active loans.")
+
+# Register these new commands in your main() method:
+# app.add_handler(CommandHandler("pledge", pledge_collateral))
+# app.add_handler(CommandHandler("myloans", view_loans))
+
+
 
 # --- Main Application ---
 def main():
@@ -311,6 +421,9 @@ def main():
     app.add_handler(CommandHandler("estimate", estimate))
     app.add_handler(CommandHandler("create", create_loan))
     app.add_handler(CommandHandler("confirm", confirm_loan))
+    app.add_handler(CommandHandler("pledge", pledge_collateral))
+    app.add_handler(CommandHandler("myloans", view_loans))
+
 
     app.add_handler(MessageHandler(filters.COMMAND, unknown))
 
