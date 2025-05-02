@@ -53,8 +53,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("📈 Estimate a Loan", callback_data="estimate")]
         ]
         await update.message.reply_text(
-            "👋 Welcome to *FlexLend*!", parse_mode="Markdown"
-        )
+        "👋 *Hey there!* Welcome to *FlexLend*, your pocket loan wizard.\n\n"
+        "Let me help you estimate and secure a quick crypto loan! 🚀",
+        parse_mode="Markdown"
+)
+
         await update.message.reply_text(
             "👇 Choose an action:", reply_markup=InlineKeyboardMarkup(keyboard)
         )
@@ -111,6 +114,9 @@ async def process_estimate_input(update: Update, context: ContextTypes.DEFAULT_T
     }
     headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
 
+    await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
+
+
     try:
         r = requests.get(
             f"{API_BASE_URL}/v2/loans/estimate", headers=headers, params=params
@@ -121,15 +127,21 @@ async def process_estimate_input(update: Update, context: ContextTypes.DEFAULT_T
             res = data["response"]
             user_sessions[user_id]["latest_estimate"] = params
             await update.message.reply_text(
-                f"🎯 *Loan Estimate*\n- Amount: {res['amount_to']} USDT\n"
-                f"- Yearly: {res['interest_amounts']['year']}%\n"
-                f"- Monthly: {res['interest_amounts']['month']}%\n"
-                f"- Daily: {res['interest_amounts']['day']}%",
-                parse_mode="Markdown",
-            )
+            f"🎯 *Loan Estimate* for `{from_code}` on `{from_network}`:\n\n"
+            f"💵 *Amount You'll Receive:* `{res['amount_to']} USDT`\n"
+            f"📅 *Interest Rates:*\n"
+            f"   - Yearly: `{res['interest_amounts']['year']}%`\n"
+            f"   - Monthly: `{res['interest_amounts']['month']}%`\n"
+            f"   - Daily: `{res['interest_amounts']['day']}%`\n\n"
+            f"🔥 _Looks good? Let’s make it real!_",
+            parse_mode="Markdown",
+        )
+
             keyboard = [
-                [InlineKeyboardButton("📝 Create Loan", callback_data="create")]
+                [InlineKeyboardButton("📝 Yes, Create My Loan!", callback_data="create")],
+                [InlineKeyboardButton("🔁 Start Over", callback_data="estimate")]
             ]
+
             await update.message.reply_text(
                 "✅ Continue below:", reply_markup=InlineKeyboardMarkup(keyboard)
             )
@@ -138,7 +150,8 @@ async def process_estimate_input(update: Update, context: ContextTypes.DEFAULT_T
     except Exception as e:
         logging.error(f"Estimate error: {e}")
         await update.message.reply_text("❌ Error occurred.")
-    return ConversationHandler.END
+    return CONFIRM_WALLET
+
 
 
 # --- Create Loan ---
@@ -295,28 +308,29 @@ def main():
     app = ApplicationBuilder().token(BOT_KEY).build()
 
     conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("start", start)],
-        states={
-            ESTIMATE_AMOUNT: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_estimate_input)
-            ],
-            CONFIRM_WALLET: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_wallet)
-            ],
-            PLEDGE_ADDRESS: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, process_pledge)
-            ],
-        },
-        fallbacks=[
-            MessageHandler(
-                filters.COMMAND,
-                lambda u, c: u.message.reply_text("Unknown. Try /start"),
-            )
+    entry_points=[
+        CommandHandler("start", start),
+        CallbackQueryHandler(handle_menu_click)
+    ],
+    states={
+        ESTIMATE_AMOUNT: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_estimate_input)
         ],
-    )
+        CONFIRM_WALLET: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_wallet)
+        ],
+        PLEDGE_ADDRESS: [
+            MessageHandler(filters.TEXT & ~filters.COMMAND, process_pledge)
+        ],
+    },
+    fallbacks=[
+        MessageHandler(filters.COMMAND, lambda u, c: u.message.reply_text("Unknown. Try /start"))
+    ],
+)
+
 
     app.add_handler(conv_handler)
-    app.add_handler(CallbackQueryHandler(handle_menu_click))
+
     app.run_polling()
 
 
