@@ -1,4 +1,4 @@
-# FlexLend Bot - GUI-Enhanced Loan Workflow
+# FlexLend Bot - Refactored Version Based on Client Feedback
 import os
 import logging
 import requests
@@ -14,21 +14,30 @@ from telegram.ext import (
     ConversationHandler,
 )
 
+# Load environment variables
 load_dotenv()
 BOT_KEY = os.getenv("TELEGRAM_API_KEY")
 API_BASE_URL = "https://api.coinrabbit.io"
 API_KEY = os.getenv("API_KEY")
 user_sessions = {}
 
+# Logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 
-# --- Conversation States ---
-ESTIMATE_AMOUNT, CONFIRM_WALLET, PLEDGE_ADDRESS = range(3)
+# Conversation states
+(
+    SELECT_COLLATERAL_CURRENCY,
+    SELECT_COLLATERAL_NETWORK,
+    ENTER_COLLATERAL_AMOUNT,
+    SELECT_LOAN_CURRENCY,
+    SELECT_LOAN_NETWORK,
+    SELECT_LTV_PERCENT,
+    ENTER_WALLET,
+) = range(7)
 
-
-# --- Auth Function ---
+# Start command
 def authenticate_user(external_id: str) -> str:
     try:
         r = requests.post(
@@ -42,297 +51,156 @@ def authenticate_user(external_id: str) -> str:
         logging.error(f"Authentication failed: {e}")
         return None
 
-
-# --- START ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     token = authenticate_user(str(user_id))
     if token:
         user_sessions[user_id] = {"user_token": token}
         keyboard = [
-            [InlineKeyboardButton("📈 Estimate a Loan", callback_data="estimate")]
+            [InlineKeyboardButton("\U0001F4C8 Estimate a Loan", callback_data="start_estimate")]
         ]
         await update.message.reply_text(
-        "👋 *Hey there!* Welcome to *FlexLend*, your pocket loan wizard.\n\n"
-        "Let me help you estimate and secure a quick crypto loan! 🚀",
-        parse_mode="Markdown"
-)
-
-        await update.message.reply_text(
-            "👇 Choose an action:", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-    else:
-        await update.message.reply_text("❌ Authentication failed.")
-
-
-# --- Handle Main Menu ---
-async def handle_menu_click(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if query.data == "estimate":
-        await query.edit_message_text(
-            "💰 Please enter loan details: Format: `BTC BTC 0.1 0.8`",
+            "\U0001F44B *Welcome to FlexLend!*\n\nI'm here to help you create a crypto-backed loan.\nClick below to get started.",
             parse_mode="Markdown",
         )
-        return ESTIMATE_AMOUNT
-    elif query.data == "create":
-        return await create_loan(update, context)
-    elif query.data == "confirm":
-        await query.edit_message_text("🪪 Send your wallet address to receive funds:")
-        return CONFIRM_WALLET
-    elif query.data == "pledge":
-        await query.edit_message_text("🔐 Send your collateral return address:")
-        return PLEDGE_ADDRESS
-    elif query.data == "myloans":
-        return await view_loans(update, context)
+        await update.message.reply_text("\u2B07\uFE0F Choose an action:", reply_markup=InlineKeyboardMarkup(keyboard))
+    else:
+        await update.message.reply_text("\u274C Authentication failed.")
 
+# Step 1: Select Collateral Currency
+async def handle_estimate_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    user_sessions[update.effective_user.id]["estimate"] = {}
+    keyboard = [[InlineKeyboardButton(curr, callback_data=f"collat_curr:{curr}")]
+                for curr in ["BTC", "ETH", "LTC"]]
+    await update.callback_query.edit_message_text("Select Collateral Currency:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_COLLATERAL_CURRENCY
 
-# --- Handle Estimate Input ---
-async def process_estimate_input(update: Update, context: ContextTypes.DEFAULT_TYPE):
+# Step 2: Select Collateral Network
+async def select_collateral_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    currency = update.callback_query.data.split(":")[1]
+    user_sessions[update.effective_user.id]["estimate"]["from_code"] = currency
+    keyboard = [[InlineKeyboardButton(currency, callback_data=f"collat_net:{currency}")]]
+    await update.callback_query.edit_message_text("Select Collateral Network:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_COLLATERAL_NETWORK
+
+# Step 3: Enter Collateral Amount
+async def select_collateral_network(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    network = update.callback_query.data.split(":")[1]
+    user_sessions[update.effective_user.id]["estimate"]["from_network"] = network
+    await update.callback_query.edit_message_text("Enter Collateral Amount (e.g. 0.1):")
+    return ENTER_COLLATERAL_AMOUNT
+
+# Step 4: Select Loan Currency
+async def enter_collateral_amount(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    amount = update.message.text.strip()
+    user_sessions[update.effective_user.id]["estimate"]["amount"] = amount
+    keyboard = [[InlineKeyboardButton(curr, callback_data=f"loan_curr:{curr}")]
+                for curr in ["USDT", "USDC"]]
+    await update.message.reply_text("Select Loan Currency:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_LOAN_CURRENCY
+
+# Step 5: Select Loan Network
+async def select_loan_currency(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    loan_curr = update.callback_query.data.split(":")[1]
+    user_sessions[update.effective_user.id]["estimate"]["to_code"] = loan_curr
+    keyboard = [[InlineKeyboardButton(net, callback_data=f"loan_net:{net}")]
+                for net in ["ETH", "TRX", "BSC"]]
+    await update.callback_query.edit_message_text("Select Loan Network:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_LOAN_NETWORK
+
+# Step 6: Select LTV
+async def select_loan_network(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    loan_net = update.callback_query.data.split(":")[1]
+    user_sessions[update.effective_user.id]["estimate"]["to_network"] = loan_net
+    keyboard = [[InlineKeyboardButton(f"{v}%", callback_data=f"ltv:{v}")]
+                for v in [30, 40, 50, 60, 70]]
+    await update.callback_query.edit_message_text("Select Loan-to-Value Ratio:", reply_markup=InlineKeyboardMarkup(keyboard))
+    return SELECT_LTV_PERCENT
+
+# Step 7: Show Estimate and Ask for Wallet
+async def select_ltv(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.callback_query.answer()
+    ltv = update.callback_query.data.split(":")[1]
     user_id = update.effective_user.id
-    if user_id not in user_sessions:
-        await update.message.reply_text("❌ Please start with /start")
-        return ConversationHandler.END
-
-    args = update.message.text.strip().split()
-    if len(args) != 4:
-        await update.message.reply_text(
-            "⚠️ Format error. Use: `BTC BTC 0.1 0.8`", parse_mode="Markdown"
-        )
-        return ESTIMATE_AMOUNT
-
-    from_code, from_network, amount, ltv_percent = args
-    params = {
-        "from_code": from_code.upper(),
-        "from_network": from_network.upper(),
-        "to_code": "USDT",
-        "to_network": "ETH",
-        "amount": amount,
-        "ltv_percent": ltv_percent,
-        "exchange": "direct",
-    }
+    user_sessions[user_id]["estimate"]["ltv_percent"] = int(ltv)
+    params = user_sessions[user_id]["estimate"]
+    params["exchange"] = "direct"
     headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
+
+    logging.info(f"[Estimate] Params: {params}")
 
     await context.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
 
-
     try:
-        r = requests.get(
-            f"{API_BASE_URL}/v2/loans/estimate", headers=headers, params=params
-        )
+        r = requests.get(f"{API_BASE_URL}/v2/loans/estimate", headers=headers, params=params)
         r.raise_for_status()
         data = r.json()
+
+        logging.info(f"[Estimate] API response: {data}")
+
         if data.get("result") and data.get("response"):
             res = data["response"]
             user_sessions[user_id]["latest_estimate"] = params
-            await update.message.reply_text(
-            f"🎯 *Loan Estimate* for `{from_code}` on `{from_network}`:\n\n"
-            f"💵 *Amount You'll Receive:* `{res['amount_to']} USDT`\n"
-            f"📅 *Interest Rates:*\n"
-            f"   - Yearly: `{res['interest_amounts']['year']}%`\n"
-            f"   - Monthly: `{res['interest_amounts']['month']}%`\n"
-            f"   - Daily: `{res['interest_amounts']['day']}%`\n\n"
-            f"🔥 _Looks good? Let’s make it real!_",
-            parse_mode="Markdown",
-        )
-
-            keyboard = [
-                [InlineKeyboardButton("📝 Yes, Create My Loan!", callback_data="create")],
-                [InlineKeyboardButton("🔁 Start Over", callback_data="estimate")]
-            ]
-
-            await update.message.reply_text(
-                "✅ Continue below:", reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        else:
-            await update.message.reply_text("❌ Failed to estimate. Please try again.")
-    except Exception as e:
-        logging.error(f"Estimate error: {e}")
-        await update.message.reply_text("❌ Error occurred.")
-    return CONFIRM_WALLET
-
-
-
-# --- Create Loan ---
-async def create_loan(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or not session.get("latest_estimate"):
-        await update.callback_query.edit_message_text(
-            "⚠️ Please estimate your loan first."
-        )
-        return ConversationHandler.END
-    estimate = session["latest_estimate"]
-    headers = {
-        "x-api-key": API_KEY,
-        "x-user-token": session["user_token"],
-        "Content-Type": "application/json",
-    }
-    payload = {
-        "deposit": {
-            "currency_code": estimate["from_code"],
-            "currency_network": estimate["from_network"],
-            "expected_amount": estimate["amount"],
-        },
-        "loan": {"currency_code": "USDT", "currency_network": "ETH"},
-        "ltv_percent": estimate["ltv_percent"],
-        "referral": "qUwXXaSe1S",
-    }
-    try:
-        r = requests.post(f"{API_BASE_URL}/v2/loans", headers=headers, json=payload)
-        r.raise_for_status()
-        data = r.json().get("response", {})
-        loan_id = data.get("loan_id")
-        if loan_id:
-            user_sessions[user_id]["current_loan_id"] = loan_id
             await update.callback_query.edit_message_text(
-                f"🎉 Loan Created!\nID: `{loan_id}`\nTap below to confirm it.",
-                parse_mode="Markdown",
+                f"\U0001F3AF *Loan Estimate*\n\n"
+                f"\U0001F4B5 *Receive:* `{res['amount_to']} {params['to_code']}` on `{params['to_network']}`\n"
+                f"\U0001F4C5 *Interest:*\n"
+                f"  \u2022 Year: `{res['interest_amounts']['year']}%`\n"
+                f"  \u2022 Month: `{res['interest_amounts']['month']}%`\n"
+                f"  \u2022 Day: `{res['interest_amounts']['day']}%`\n\n"
+                f"\U0001F50E _Now, send your wallet to receive funds:_",
+                parse_mode="Markdown"
             )
-            keyboard = [
-                [InlineKeyboardButton("✅ Confirm Loan", callback_data="confirm")]
-            ]
-            await update.callback_query.message.reply_text(
-                "👇", reply_markup=InlineKeyboardMarkup(keyboard)
+            return ENTER_WALLET
+        else:
+            await update.callback_query.edit_message_text("❌ Failed to get estimate.")
+            return ConversationHandler.END
+
+    except requests.exceptions.HTTPError as e:
+        if e.response.status_code == 500:
+            await update.callback_query.edit_message_text(
+                "❌ CoinRabbit API returned an error. This currency/network combination might be unsupported.\n"
+                "Try using BTC on BTC network with USDT on ETH."
             )
         else:
-            await update.callback_query.edit_message_text("❌ Could not create loan.")
-    except Exception as e:
-        logging.error(f"Loan creation failed: {e}")
-        await update.callback_query.edit_message_text("❌ Server error.")
-    return ConversationHandler.END
-
-
-async def process_wallet(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or "current_loan_id" not in session:
-        await update.message.reply_text("❌ No loan created.")
+            await update.callback_query.edit_message_text("❌ Error getting estimate.")
+        logging.error(f"[Estimate] HTTPError: {e}")
+        logging.error(f"[Estimate] Params used: {params}")
         return ConversationHandler.END
 
-    wallet = update.message.text.strip()
-    payload = {"loan": {"receive_address": wallet}, "agreed_to_tos": True}
-    headers = {
-        "x-api-key": API_KEY,
-        "x-user-token": session["user_token"],
-        "Content-Type": "application/json",
-    }
-    try:
-        r = requests.post(
-            f"{API_BASE_URL}/v2/loans/{session['current_loan_id']}/confirm",
-            headers=headers,
-            json=payload,
-        )
-        r.raise_for_status()
-        await update.message.reply_text("✅ Loan confirmed. Funds will arrive shortly.")
-        keyboard = [
-            [InlineKeyboardButton("🔐 Pledge Collateral", callback_data="pledge")]
-        ]
-        await update.message.reply_text(
-            "Next step:", reply_markup=InlineKeyboardMarkup(keyboard)
-        )
     except Exception as e:
-        logging.error(f"Confirm error: {e}")
-        await update.message.reply_text("❌ Could not confirm loan.")
-    return ConversationHandler.END
-
-
-# --- Pledge Address Input ---
-async def process_pledge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    session = user_sessions.get(user_id)
-    if not session or "current_loan_id" not in session:
-        await update.message.reply_text("❌ No active loan found.")
+        logging.error(f"[Estimate] Unexpected error: {e}")
+        logging.error(f"[Estimate] Params used: {params}")
+        await update.callback_query.edit_message_text("❌ Unexpected error occurred.")
         return ConversationHandler.END
-
-    addr = update.message.text.strip()
-    headers = {
-        "x-api-key": API_KEY,
-        "x-user-token": session["user_token"],
-        "Content-Type": "application/json",
-    }
-    payload = {"address": addr, "extra_id": None}
-    try:
-        r = requests.post(
-            f"{API_BASE_URL}/v2/loans/{session['current_loan_id']}/pledge",
-            headers=headers,
-            json=payload,
-        )
-        r.raise_for_status()
-        deposit = r.json().get("response", {}).get("deposit_address")
-        if deposit:
-            await update.message.reply_text(
-                f"📥 Send your collateral to: `{deposit}`", parse_mode="Markdown"
-            )
-        else:
-            await update.message.reply_text("❌ Failed to get deposit address.")
-    except Exception as e:
-        logging.error(f"Pledge error: {e}")
-        await update.message.reply_text("❌ Error during pledge.")
-    return ConversationHandler.END
-
-
-# --- View Loans ---
-async def view_loans(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    token = user_sessions.get(user_id, {}).get("user_token")
-    if not token:
-        await update.callback_query.edit_message_text(
-            "❌ Please authenticate with /start"
-        )
-        return
-
-    try:
-        r = requests.get(
-            f"{API_BASE_URL}/v2/loans",
-            headers={"x-api-key": API_KEY, "x-user-token": token},
-        )
-        r.raise_for_status()
-        loans = r.json().get("response", [])
-        if not loans:
-            await update.callback_query.edit_message_text("📭 No active loans.")
-            return
-        txt = "📋 *Active Loans:*\n"
-        for loan in loans:
-            txt += f"\n• ID: `{loan['loan_id']}`\n  Amount: {loan['loan']['expected_amount']} USDT\n  Status: {loan['status']}\n"
-        await update.callback_query.edit_message_text(txt, parse_mode="Markdown")
-    except Exception as e:
-        logging.error(f"View error: {e}")
-        await update.callback_query.edit_message_text("❌ Couldn't fetch loan info.")
-    return ConversationHandler.END
-
 
 # --- Setup Main App ---
 def main():
     app = ApplicationBuilder().token(BOT_KEY).build()
 
     conv_handler = ConversationHandler(
-    entry_points=[
-        CommandHandler("start", start),
-        CallbackQueryHandler(handle_menu_click)
-    ],
-    states={
-        ESTIMATE_AMOUNT: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, process_estimate_input)
+        entry_points=[
+            CommandHandler("start", start),
+            CallbackQueryHandler(handle_estimate_start, pattern="^start_estimate$")
         ],
-        CONFIRM_WALLET: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, process_wallet)
-        ],
-        PLEDGE_ADDRESS: [
-            MessageHandler(filters.TEXT & ~filters.COMMAND, process_pledge)
-        ],
-    },
-    fallbacks=[
-        MessageHandler(filters.COMMAND, lambda u, c: u.message.reply_text("Unknown. Try /start"))
-    ],
-)
-
+        states={
+            SELECT_COLLATERAL_CURRENCY: [CallbackQueryHandler(select_collateral_currency, pattern="^collat_curr:.*")],
+            SELECT_COLLATERAL_NETWORK: [CallbackQueryHandler(select_collateral_network, pattern="^collat_net:.*")],
+            ENTER_COLLATERAL_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, enter_collateral_amount)],
+            SELECT_LOAN_CURRENCY: [CallbackQueryHandler(select_loan_currency, pattern="^loan_curr:.*")],
+            SELECT_LOAN_NETWORK: [CallbackQueryHandler(select_loan_network, pattern="^loan_net:.*")],
+            SELECT_LTV_PERCENT: [CallbackQueryHandler(select_ltv, pattern="^ltv:.*")],
+        },
+        fallbacks=[]
+    )
 
     app.add_handler(conv_handler)
-
     app.run_polling()
-
 
 if __name__ == "__main__":
     main()
