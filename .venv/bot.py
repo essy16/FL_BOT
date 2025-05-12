@@ -127,7 +127,7 @@ async def select_ltv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.callback_query.answer()
     ltv = update.callback_query.data.split(":")[1]
     user_id = update.effective_user.id
-    user_sessions[user_id]["estimate"]["ltv_percent"] = int(ltv)
+    user_sessions[user_id]["estimate"]["ltv_percent"] = float(ltv) / 100
     params = user_sessions[user_id]["estimate"]
     params["exchange"] = "direct"
     headers = {"x-api-key": API_KEY, "Content-Type": "application/json"}
@@ -178,6 +178,9 @@ async def select_ltv(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"[Estimate] Params used: {params}")
         await update.callback_query.edit_message_text("❌ Unexpected error occurred.")
         return ConversationHandler.END
+
+
+
 
 # --- Setup Main App ---
 def main():
